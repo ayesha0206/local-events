@@ -1,98 +1,297 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  Platform,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { DiscoverFilterBar } from '@/components/events/DiscoverFilterBar';
+import { EventCard } from '@/components/events/EventCard';
+import { Palette, Radii, Spacing, Typography } from '@/constants/theme';
+import { MOCK_EVENTS } from '@/data/mock-events';
+import {
+  loadDiscoverEvents,
+  type DiscoverSource,
+} from '@/lib/discover-events';
+import {
+  applyDiscoverFilters,
+  EMPTY_DISCOVER_FILTERS,
+  uniqueCategories,
+  type DiscoverFilters,
+} from '@/lib/discover-filters';
+import {
+  requestForegroundLocationPermission,
+  type Coords,
+  type ForegroundPermissionResult,
+} from '@/lib/location';
+import type { Event } from '@/types/event';
 
-export default function HomeScreen() {
+type DiscoverState = {
+  events: Event[];
+  source: DiscoverSource;
+  statusMessage: string;
+  error: string | null;
+  coords: Coords | null;
+  permission: ForegroundPermissionResult | null;
+  loading: boolean;
+  refreshing: boolean;
+};
+
+function permissionLabel(result: ForegroundPermissionResult | null): string {
+  if (!result) {
+    return 'Checking location…';
+  }
+  if (result.granted) {
+    return 'Location: allowed';
+  }
+  if (!result.canAskAgain) {
+    return 'Location: blocked — enable in Settings';
+  }
+  return 'Location: not allowed yet';
+}
+
+export default function DiscoverScreen() {
+  const [state, setState] = useState<DiscoverState>({
+    events: MOCK_EVENTS,
+    source: 'mock',
+    statusMessage: 'Loading nearby events…',
+    error: null,
+    coords: null,
+    permission: null,
+    loading: true,
+    refreshing: false,
+  });
+  const [filters, setFilters] = useState<DiscoverFilters>(EMPTY_DISCOVER_FILTERS);
+
+  const loadDiscover = useCallback(async (mode: 'initial' | 'refresh' | 'after-permission') => {
+    setState((prev) => ({
+      ...prev,
+      loading: mode === 'initial',
+      refreshing: mode === 'refresh',
+    }));
+
+    const result = await loadDiscoverEvents({
+      requestPermissionIfNeeded: mode === 'after-permission',
+    });
+
+    setState({
+      events: result.events,
+      source: result.source,
+      statusMessage: result.statusMessage,
+      error: result.error,
+      coords: result.coords,
+      permission: result.permission,
+      loading: false,
+      refreshing: false,
+    });
+  }, []);
+
+  useEffect(() => {
+    void loadDiscover('initial');
+  }, [loadDiscover]);
+
+  async function onEnableLocation() {
+    setState((prev) => ({ ...prev, loading: true }));
+    const permission = await requestForegroundLocationPermission();
+    setState((prev) => ({ ...prev, permission }));
+    await loadDiscover('after-permission');
+  }
+
+  const categories = useMemo(
+    () => uniqueCategories(state.events),
+    [state.events]
+  );
+
+  const filteredEvents = useMemo(
+    () => applyDiscoverFilters(state.events, filters),
+    [state.events, filters]
+  );
+
+  const showRequest =
+    state.permission !== null &&
+    !state.permission.granted &&
+    state.permission.canAskAgain;
+
+  const emptyTitle =
+    state.error && state.source === 'mock'
+      ? 'Could not refresh live listings'
+      : state.events.length === 0
+        ? 'Nothing nearby yet'
+        : 'No matches';
+
+  const emptyBody =
+    state.events.length === 0
+      ? state.error
+        ? `${state.error} Pull to try again, or check that published events exist near your Simulator location.`
+        : 'Pull to refresh, or publish an event near your Simulator location.'
+      : 'No events match these filters. Try All or turn off Free.';
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar style="dark" />
+      <View style={styles.container}>
+        <Text style={styles.header}>Discover</Text>
+        <Text style={styles.subheader}>Find what is happening nearby</Text>
+        <Text style={styles.permission}>{permissionLabel(state.permission)}</Text>
+        {showRequest ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={state.loading}
+            onPress={() => void onEnableLocation()}
+            style={({ pressed }) => [
+              styles.permissionButton,
+              (pressed || state.loading) && styles.permissionButtonPressed,
+            ]}
+          >
+            <Text style={styles.permissionButtonText}>
+              {state.loading ? 'Requesting…' : 'Enable location'}
+            </Text>
+          </Pressable>
+        ) : null}
+        <Text style={[styles.status, state.error ? styles.statusError : null]}>
+          {state.statusMessage}
+        </Text>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+        {!state.loading || state.refreshing ? (
+          <DiscoverFilterBar
+            categories={categories}
+            filters={filters}
+            onChange={setFilters}
+          />
+        ) : null}
+
+        {state.loading && !state.refreshing ? (
+          <View style={styles.loading}>
+            <ActivityIndicator color={Palette.accent} size="large" />
+          </View>
+        ) : (
+          <FlatList
+            data={filteredEvents}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => <EventCard item={item} />}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={state.refreshing}
+                onRefresh={() => void loadDiscover('refresh')}
+                tintColor={Palette.accent}
+              />
+            }
+            ListEmptyComponent={
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyTitle}>{emptyTitle}</Text>
+                <Text style={styles.empty}>{emptyBody}</Text>
+                {state.error || state.events.length === 0 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => void loadDiscover('refresh')}
+                    style={({ pressed }) => [
+                      styles.retryButton,
+                      pressed && styles.permissionButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.retryButtonText}>Try again</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            }
+          />
+        )}
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
+  safeArea: {
+    flex: 1,
+    backgroundColor: Palette.cream,
+  },
+  container: {
+    flex: 1,
+    paddingHorizontal: Spacing.screenX,
+    paddingTop:
+      Platform.OS === 'android' ? Spacing.screenTopAndroid : Spacing.screenTopIos,
+  },
+  header: {
+    ...Typography.header,
+    color: Palette.title,
+  },
+  subheader: {
+    ...Typography.subheader,
+    marginTop: Spacing.headerGap,
+    color: Palette.subheader,
+  },
+  permission: {
+    ...Typography.body,
+    marginTop: Spacing.headerGap,
+    color: Palette.subheader,
+  },
+  permissionButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: Palette.accent,
+    paddingHorizontal: Spacing.pillX,
+    paddingVertical: Spacing.pillY,
+    borderRadius: Radii.pill,
+    marginTop: Spacing.metaGap,
+  },
+  permissionButtonPressed: {
+    opacity: 0.85,
+  },
+  permissionButtonText: {
+    ...Typography.pill,
+    color: Palette.onAccent,
+  },
+  status: {
+    ...Typography.body,
+    marginTop: Spacing.metaGap,
+    marginBottom: Spacing.metaGap,
+    color: Palette.ink,
+  },
+  statusError: {
+    color: Palette.destructive,
+  },
+  loading: {
+    flex: 1,
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  listContent: {
+    paddingBottom: Spacing.listBottom,
+    flexGrow: 1,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  emptyWrap: {
+    paddingTop: Spacing.sectionBottom,
+    gap: Spacing.metaGap,
+  },
+  emptyTitle: {
+    ...Typography.subheader,
+    color: Palette.title,
+    fontWeight: '700',
+  },
+  empty: {
+    ...Typography.body,
+    color: Palette.ink,
+    lineHeight: 22,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    marginTop: Spacing.metaGap,
+    backgroundColor: Palette.accent,
+    paddingHorizontal: Spacing.pillX,
+    paddingVertical: Spacing.pillY,
+    borderRadius: Radii.pill,
+  },
+  retryButtonText: {
+    ...Typography.pill,
+    color: Palette.onAccent,
   },
 });
